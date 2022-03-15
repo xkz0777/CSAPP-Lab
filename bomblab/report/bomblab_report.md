@@ -159,7 +159,7 @@ $ objdump -d bomb > bomb.asm
 
 说明读入两个整数, 之后由 400f6a 和 400f6f 可知, 第一个参数 (存在 rax 中) 介于 0 到 7 之间, 然后要根据它的值进行跳转, 由于地址 0x402470 已结超出了该函数的范围, 猜测那里存储着能够跳转回来的地址, 用 gdb 查看:
 
-```
+```shell
 (gdb) x/8a 0x402470
 0x402470:       0x400f7c <phase_3+57>   0x400fb9 <phase_3+118>
 0x402480:       0x400f83 <phase_3+64>   0x400f8a <phase_3+71>
@@ -304,14 +304,14 @@ $ objdump -d bomb > bomb.asm
 
 用 gdb 查看 0x40245e 处字符串:
 
-```
+```shell
 (gdb) x/s 0x40245e
 0x40245e:       "flyers"
 ```
 
 那么我们只要从 0x4024b0 后面挑出这些字符就可以了:
 
-```
+```shell
 (gdb) x/s 0x4024b0
 0x4024b0 <array.3449>:  "maduiersnfotvbylSo you think you can stop the bomb with ctrl-c, do you?"
 ```
@@ -503,16 +503,16 @@ for (int i = 0; i < 6; ++i) {
 401176 到 4011a9是这两层循环, 发现外层所做的事无非是更新了 `rdx` 的值, 而内层是为了将地址 `rsp + 2 * rsi + 32` 处的值设为 `rdx`. 而 `rdx` 的值似乎与 `0x6032d0` 这个地址的值脱不开关系, 我们用 gdb 查看:
 
 ```
-(gdb) x/24wx 0x6032d0
-0x6032d0 <node1>:       0x0000014c      0x00000001      0x006032e0      0x00000000
-0x6032e0 <node2>:       0x000000a8      0x00000002      0x006032f0      0x00000000
-0x6032f0 <node3>:       0x0000039c      0x00000003      0x00603300      0x00000000
-0x603300 <node4>:       0x000002b3      0x00000004      0x00603310      0x00000000
-0x603310 <node5>:       0x000001dd      0x00000005      0x00603320      0x00000000
-0x603320 <node6>:       0x000001bb      0x00000006      0x00000000      0x00000000
+(gdb) x/12gx 0x6032d0
+0x6032d0 <node1>:       0x000000010000014c      0x00000000006032e0
+0x6032e0 <node2>:       0x00000002000000a8      0x00000000006032f0
+0x6032f0 <node3>:       0x000000030000039c      0x0000000000603300
+0x603300 <node4>:       0x00000004000002b3      0x0000000000603310
+0x603310 <node5>:       0x00000005000001dd      0x0000000000603320
+0x603320 <node6>:       0x00000006000001bb      0x0000000000000000
 ```
 
-发现很有规律性, 因为 `rdx` 是八个字节, 因此这里需要两个两个 word 一起看, 外层循环 `rdx = *(rdx + 8)` 就会跳掉下一个 node 的第二个域, 再根据名字为 `node`, 一下就能发现这是链表结构, 第一个域是数据, 第二个域是指针.
+发现很有规律性, 根据名字 `node` 以及外层循环 `rdx = *(rdx + 8)` 就会跳掉下一个 node 的第二个域, 一下就能发现这是链表结构, 前面是数据域 (可能是两个数据域也可能是一个), 第二个域是指针.
 
 说明数组 `b` 是一个链表结点的索引表, 这段代码可以用高级语言表示 (用 `node` 表示链表结点数组):
 
@@ -548,8 +548,205 @@ for (int j = 0; j < 5; ++j) {
 }
 ```
 
-这时就很显然了, 我们此时的数据就是 `node` 们按照数据域从大到小的排序, 为 "3 4 5 6 1 2", 注意之前还用 7 减了它们, 最终答案是 "4 3 2 1 6 5"
+这时就很显然了, 我们此时的数据就是 `node` 们按照数据域从大到小的排序, 注意到这里数据域只取 4 个字节, 因此需要重新查看数据域:
+
+```assembly
+(gdb) x/24wx 0x6032d0
+0x6032d0 <node1>:       0x0000014c      0x00000001      0x006032e0      0x00000000
+0x6032e0 <node2>:       0x000000a8      0x00000002      0x006032f0      0x00000000
+0x6032f0 <node3>:       0x0000039c      0x00000003      0x00603300      0x00000000
+0x603300 <node4>:       0x000002b3      0x00000004      0x00603310      0x00000000
+0x603310 <node5>:       0x000001dd      0x00000005      0x00603320      0x00000000
+0x603320 <node6>:       0x000001bb      0x00000006      0x00000000      0x00000000
+```
+
+显然从大到小排序为 "3 4 5 6 1 2", 注意之前还用 7 减了它们, 最终答案是 "4 3 2 1 6 5"
 
 最后终于拆弹完成, 成功截图如下:
 
 ![image-20220315194138581](images/success.png)
+
+## Secret Phase
+
+### 摸索进入 Secret Phase
+
+观察源码的注释:
+
+> Wow, they got it!  But isn't something... missing?  Perhaps something they overlooked?  Mua ha ha ha ha!
+
+然后再观察反汇编的代码, 发现 Phase 6 下面还有函数 `fun7` 和 `secret_phase`. 但是源码中并没有明确的调用 `secret_phase` 的地方. 我们首先在反汇编代码中搜索 `secret_phase`, 发现只有函数 `phase_defused` 会调用 `secret_phase`, 查看该函数, 发现其会将 0x603760 处的变量 `num_input_strings` 和 6 比较, 不是 6 会直接结束, 是 6 则会调用 `sscanf` 函数, 我们用 gdb 查看它的前两个参数:
+
+```shell
+(gdb) x/s 0x603870
+0x603870 <input_strings+240>:   ""
+(gdb) x/s 0x402619
+0x402619:       "%d %d %s"
+```
+
+发现其会从 `input_strings+240` 这个地方读入两个整数和一个字符串, 由前面的变量名可以猜测 `input_strings` 是所有 Phase 输入的字符串, 加上 240 的偏移应该对应某个 phase 的输入, 通过 gdb 在 `sscanf` 前打断点测试:
+
+```shell
+(gdb) b *0x4015fa
+Breakpoint 1 at 0x4015fa
+(gdb) r answer.txt 
+Starting program: /home/xkz/Course/CSAPP-Lab/bomblab/bomb/bomb answer.txt
+Welcome to my fiendish little bomb. You have 6 phases with
+which to blow yourself up. Have a nice day!
+Phase 1 defused. How about the next one?
+That's number 2.  Keep going!
+Halfway there!
+So you got that one.  Try this one.
+Good work!  On to the next...
+
+Breakpoint 1, 0x00000000004015fa in phase_defused ()
+(gdb) x/s 0x603870
+0x603870 <input_strings+240>:   "0 0"
+```
+
+猜测这是 Phase 4 的输入, 然后其将第三个参数与 0x402622 处的字符串作比较, 相等就会输出两个字符串并进入 `secret_phase`. 用 gdb 查看:
+
+```shell
+(gdb) x/s 0x402622
+0x402622:       "DrEvil"
+```
+
+在 answer.txt 文件中加入 DrEvil, 再次运行:
+
+```shell
+$ ./bomb answer.txt
+Welcome to my fiendish little bomb. You have 6 phases with
+which to blow yourself up. Have a nice day!
+Phase 1 defused. How about the next one?
+That's number 2.  Keep going!
+Halfway there!
+So you got that one.  Try this one.
+Good work!  On to the next...
+Curses, you've found the secret phase!
+But finding it and solving it are quite different...
+```
+
+成功找到 `secret_phase`, 事实上有更明确的理由说明 0x603870 处的字符串就是 Phase 4 处的字符串, 我们查看 `read_line` 函数的代码:
+
+```assembly
+read_line:
+  ...
+  40151f:	8b 15 3b 22 20 00    	mov    0x20223b(%rip),%edx        # 603760 <num_input_strings>
+  401525:	48 63 c2             	movslq %edx,%rax
+  401528:	48 8d 34 80          	lea    (%rax,%rax,4),%rsi
+  40152c:	48 c1 e6 04          	shl    $0x4,%rsi
+  401530:	48 81 c6 80 37 60 00 	add    $0x603780,%rsi
+  401537:	48 89 f7             	mov    %rsi,%rdi
+  40153a:	b8 00 00 00 00       	mov    $0x0,%eax
+  40153f:	48 c7 c1 ff ff ff ff 	mov    $0xffffffffffffffff,%rcx
+  401546:	f2 ae                	repnz scas %es:(%rdi),%al
+```
+
+会发现 `rsi = (num_input_strings * 5) << 4 = 80 * num_input_strings`, 而 `rsi` 后面又加上了 0x603780, 说明它是每次读取的偏移量, 240 * 80 + 1 便得到这是 Phase 4 处的字符串.
+
+### 破解 Secret Phase
+
+反汇编代码:
+
+```assembly
+0000000000401242 <secret_phase>:
+  401242:	53                   	push   %rbx
+  401243:	e8 56 02 00 00       	callq  40149e <read_line>
+  401248:	ba 0a 00 00 00       	mov    $0xa,%edx # edx = 10
+  40124d:	be 00 00 00 00       	mov    $0x0,%esi # rsi = 0
+  401252:	48 89 c7             	mov    %rax,%rdi # rdi = rax
+  401255:	e8 76 f9 ff ff       	callq  400bd0 <strtol@plt> # convert input to integer
+  40125a:	48 89 c3             	mov    %rax,%rbx # rbx = rax
+  40125d:	8d 40 ff             	lea    -0x1(%rax),%eax # eax = rax - 1
+  401260:	3d e8 03 00 00       	cmp    $0x3e8,%eax # eax:0x3e8
+  401265:	76 05                	jbe    40126c <secret_phase+0x2a> # skip next
+  401267:	e8 ce 01 00 00       	callq  40143a <explode_bomb>
+  40126c:	89 de                	mov    %ebx,%esi # esi = ebx
+  40126e:	bf f0 30 60 00       	mov    $0x6030f0,%edi # edi = 0x6030f0
+  401273:	e8 8c ff ff ff       	callq  401204 <fun7>
+  401278:	83 f8 02             	cmp    $0x2,%eax
+  40127b:	74 05                	je     401282 <secret_phase+0x40> # if fun7 return 2, skip next
+  40127d:	e8 b8 01 00 00       	callq  40143a <explode_bomb>
+  401282:	bf 38 24 40 00       	mov    $0x402438,%edi
+  401287:	e8 84 f8 ff ff       	callq  400b10 <puts@plt>
+  40128c:	e8 33 03 00 00       	callq  4015c4 <phase_defused>
+  401291:	5b                   	pop    %rbx
+  401292:	c3                   	retq
+```
+
+发现其又读入了一行, 调用 `strtol` 说明读入的是一个整数, 转成整数后 (不妨记为 x), 要求其介于 1 和 0x3e8 + 1 (1001) 之间. 然后以 0x6030f0 和 x 为参数调用 `fun7`, 需要其返回 2.
+
+看 `fun7`:
+
+```assembly
+0000000000401204 <fun7>:
+  401204:	48 83 ec 08          	sub    $0x8,%rsp
+  401208:	48 85 ff             	test   %rdi,%rdi
+  40120b:	74 2b                	je     401238 <fun7+0x34> # if rdi = 0 return 0xffffffff
+  40120d:	8b 17                	mov    (%rdi),%edx # edx = *rdi
+  40120f:	39 f2                	cmp    %esi,%edx # edx:esi
+  401211:	7e 0d                	jle    401220 <fun7+0x1c> # goto break
+  401213:	48 8b 7f 08          	mov    0x8(%rdi),%rdi # rdi = *(rdi + 8)
+  401217:	e8 e8 ff ff ff       	callq  401204 <fun7>
+  40121c:	01 c0                	add    %eax,%eax # eax <<= 1
+  40121e:	eb 1d                	jmp    40123d <fun7+0x39> # return 
+  
+  # break
+  401220:	b8 00 00 00 00       	mov    $0x0,%eax # eax = 0
+  401225:	39 f2                	cmp    %esi,%edx # edx:esi
+  401227:	74 14                	je     40123d <fun7+0x39> # return
+  401229:	48 8b 7f 10          	mov    0x10(%rdi),%rdi # rdi = *(rdi + 16)
+  40122d:	e8 d2 ff ff ff       	callq  401204 <fun7>
+  401232:	8d 44 00 01          	lea    0x1(%rax,%rax,1),%eax # eax = (rax << 1) + 1
+  401236:	eb 05                	jmp    40123d <fun7+0x39> # return
+  
+  401238:	b8 ff ff ff ff       	mov    $0xffffffff,%eax
+  40123d:	48 83 c4 08          	add    $0x8,%rsp
+  401241:	c3                   	retq
+```
+
+发现 `fun7` 也是递归函数, 一开始 `rdi` 的值是 0x6030f0, 我们查看一下那里的数据:
+
+```shell
+(gdb) x/60gx 0x6030f0
+0x6030f0 <n1>:  0x0000000000000024      0x0000000000603110
+0x603100 <n1+16>:       0x0000000000603130      0x0000000000000000
+0x603110 <n21>: 0x0000000000000008      0x0000000000603190
+0x603120 <n21+16>:      0x0000000000603150      0x0000000000000000
+0x603130 <n22>: 0x0000000000000032      0x0000000000603170
+0x603140 <n22+16>:      0x00000000006031b0      0x0000000000000000
+0x603150 <n32>: 0x0000000000000016      0x0000000000603270
+0x603160 <n32+16>:      0x0000000000603230      0x0000000000000000
+0x603170 <n33>: 0x000000000000002d      0x00000000006031d0
+0x603180 <n33+16>:      0x0000000000603290      0x0000000000000000
+0x603190 <n31>: 0x0000000000000006      0x00000000006031f0
+0x6031a0 <n31+16>:      0x0000000000603250      0x0000000000000000
+0x6031b0 <n34>: 0x000000000000006b      0x0000000000603210
+0x6031c0 <n34+16>:      0x00000000006032b0      0x0000000000000000
+0x6031d0 <n45>: 0x0000000000000028      0x0000000000000000
+0x6031e0 <n45+16>:      0x0000000000000000      0x0000000000000000
+0x6031f0 <n41>: 0x0000000000000001      0x0000000000000000
+0x603200 <n41+16>:      0x0000000000000000      0x0000000000000000
+0x603210 <n47>: 0x0000000000000063      0x0000000000000000
+0x603220 <n47+16>:      0x0000000000000000      0x0000000000000000
+0x603230 <n44>: 0x0000000000000023      0x0000000000000000
+0x603240 <n44+16>:      0x0000000000000000      0x0000000000000000
+0x603250 <n42>: 0x0000000000000007      0x0000000000000000
+0x603260 <n42+16>:      0x0000000000000000      0x0000000000000000
+0x603270 <n43>: 0x0000000000000014      0x0000000000000000
+0x603280 <n43+16>:      0x0000000000000000      0x0000000000000000
+0x603290 <n46>: 0x000000000000002f      0x0000000000000000
+0x6032a0 <n46+16>:      0x0000000000000000      0x0000000000000000
+0x6032b0 <n48>: 0x00000000000003e9      0x0000000000000000
+0x6032c0 <n48+16>:      0x0000000000000000      0x0000000000000000
+```
+
+从变量名看像是一堆结点, 再观察一下第二个指针域, 可以发现是熟悉的链表结构, 但是其有两个指针域, 每个结点 +8 或者 +16 都是指针域.
+
+注意到 `esi` 也就是 `x` 的值是没有变过的, 其用于与 `edx` 的值做比较. 可以发现如果要返回 2, 需要 401217 处递归返回 1, 这个 1 可以通过 40122d 处返回 0 得到.
+
+因此一开始必须让 `edx > x`, 来进入 401217, 因此 `x < 0x24 = 32`. 之后 `edx` 变为 8, 为了避免在 break 前继续递归, 要有 `edx <= x`, 同时为了避免 401227 处直接返回, 不能取等. `edx` 变为 `0x16 = 22`, 进入 40122d, 这时可以在 0 时返回, 得到答案 `x = 22`, 进行测试:
+
+![image-20220316002235333](images/secret_phase.png)
+
+至此成功做完 bomblab 的所有内容.
+
