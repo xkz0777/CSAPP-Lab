@@ -1,3 +1,4 @@
 **/.*
+!.gitignore
+/datalab/datalab-handout/*
 !/datalab/datalab-handout/bits.c
-/datalab/datalab-handout
